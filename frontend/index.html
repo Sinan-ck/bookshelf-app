@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookshelf</title>
+<style>
+  :root {
+    --ink: #16324f;
+    --paper: #eef2f6;
+    --card: #ffffff;
+    --line: #cfd8e3;
+    --muted: #5c6f82;
+    --amber: #e8a317;
+    --danger: #b3261e;
+    --ok: #2f7d57;
+    --font: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--ui); line-height: 1.5; }
+  header { background: var(--ink); color: #fff; padding: 2.5rem 1.25rem 2rem; }
+  header div { max-width: 52rem; margin: 0 auto; }
+  h1 { font-family: var(--font); font-size: clamp(2rem, 6vw, 3.25rem); font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+  header p { margin: .4rem 0 0; color: #b9c9db; }
+  main { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+  form { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: .6rem; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-top: -2.5rem; }
+  input, select, button { font: inherit; padding: .6rem .75rem; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--ink); min-width: 0; }
+  button { cursor: pointer; border: 0; font-weight: 600; }
+  button.primary { background: var(--amber); color: #2b1d00; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--line); }
+  :focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+  #msg { min-height: 1.5rem; margin: .75rem 0 0; color: var(--danger); font-size: .95rem; }
+  .filters { display: flex; gap: .5rem; margin: 1.25rem 0 .75rem; flex-wrap: wrap; }
+  .filters button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: .3rem .9rem; }
+  .filters button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+  li { display: grid; grid-template-columns: 1fr auto; gap: .5rem 1rem; align-items: center; background: var(--card); border: 1px solid var(--line); border-left: 6px solid var(--line); border-radius: 8px; padding: .8rem 1rem; }
+  li[data-status="reading"] { border-left-color: var(--amber); }
+  li[data-status="finished"] { border-left-color: var(--ok); }
+  .title { font-family: var(--font); font-size: 1.2rem; font-weight: 700; }
+  .meta { color: var(--muted); font-size: .92rem; }
+  .actions { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+  .actions button, .actions select { padding: .35rem .7rem; font-size: .9rem; }
+  .empty { text-align: center; color: var(--muted); padding: 2rem 1rem; border: 1px dashed var(--line); border-radius: 8px; }
+  @media (max-width: 640px) {
+    form { grid-template-columns: 1fr; margin-top: -1.5rem; }
+    li { grid-template-columns: 1fr; }
+    .actions { justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Bookshelf</h1>
+    <p>Keep track of what you want to read, are reading, and have finished.</p>
+  </div>
+</header>
+
+<main>
+  <form id="book-form">
+    <input id="title" placeholder="Book title" aria-label="Book title" required>
+    <input id="author" placeholder="Author" aria-label="Author" required>
+    <select id="status" aria-label="Status">
+      <option value="to-read">To read</option>
+      <option value="reading">Reading</option>
+      <option value="finished">Finished</option>
+    </select>
+    <button class="primary" id="submit-btn" type="submit">Add book</button>
+  </form>
+  <p id="msg" role="alert"></p>
+
+  <div class="filters" role="group" aria-label="Filter by status">
+    <button data-filter="all" aria-pressed="true">All</button>
+    <button data-filter="to-read" aria-pressed="false">To read</button>
+    <button data-filter="reading" aria-pressed="false">Reading</button>
+    <button data-filter="finished" aria-pressed="false">Finished</button>
+  </div>
+
+  <ul id="list"></ul>
+</main>
+
+<script>
+const LABELS = { "to-read": "To read", reading: "Reading", finished: "Finished" };
+const form = document.getElementById("book-form");
+const list = document.getElementById("list");
+const msg = document.getElementById("msg");
+const submitBtn = document.getElementById("submit-btn");
+let books = [];
+let filter = "all";
+let editingId = null;
+
+function say(text) { msg.textContent = text || ""; }
+
+async function api(path, opts) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!res.ok) {
+    let err = "Something went wrong.";
+    try { err = (await res.json()).error || err; } catch (_) {}
+    throw new Error(err);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+async function load() {
+  try { books = await api("/api/books"); say(""); }
+  catch (e) { say("Could not reach the server. " + e.message); }
+  render();
+}
+
+function render() {
+  list.innerHTML = "";
+  const shown = books.filter(b => filter === "all" || b.status === filter);
+  if (!shown.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.style.display = "block";
+    li.textContent = books.length ? "No books with this status." : "Your shelf is empty. Add your first book above.";
+    list.appendChild(li);
+    return;
+  }
+  for (const b of shown) {
+    const li = document.createElement("li");
+    li.dataset.status = b.status;
+
+    const info = document.createElement("div");
+    const t = document.createElement("div"); t.className = "title"; t.textContent = b.title;
+    const m = document.createElement("div"); m.className = "meta"; m.textContent = b.author + " · " + LABELS[b.status];
+    info.append(t, m);
+
+    const actions = document.createElement("div"); actions.className = "actions";
+    const sel = document.createElement("select");
+    sel.setAttribute("aria-label", "Change status of " + b.title);
+    for (const [v, l] of Object.entries(LABELS)) {
+      const o = document.createElement("option"); o.value = v; o.textContent = l; o.selected = v === b.status; sel.appendChild(o);
+    }
+    sel.onchange = () => save(b.id, { ...b, status: sel.value });
+    const edit = document.createElement("button"); edit.className = "ghost"; edit.textContent = "Edit";
+    edit.onclick = () => startEdit(b);
+    const del = document.createElement("button"); del.className = "danger"; del.textContent = "Delete";
+    del.onclick = () => remove(b);
+    actions.append(sel, edit, del);
+
+    li.append(info, actions);
+    list.appendChild(li);
+  }
+}
+
+async function save(id, data) {
+  try { await api("/api/books/" + id, { method: "PUT", body: JSON.stringify(data) }); say(""); await load(); }
+  catch (e) { say(e.message); }
+}
+
+async function remove(b) {
+  if (!confirm('Delete "' + b.title + '"?')) return;
+  try { await api("/api/books/" + b.id, { method: "DELETE" }); say(""); await load(); }
+  catch (e) { say(e.message); }
+}
+
+function startEdit(b) {
+  editingId = b.id;
+  document.getElementById("title").value = b.title;
+  document.getElementById("author").value = b.author;
+  document.getElementById("status").value = b.status;
+  submitBtn.textContent = "Save changes";
+  document.getElementById("title").focus();
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const data = {
+    title: document.getElementById("title").value,
+    author: document.getElementById("author").value,
+    status: document.getElementById("status").value,
+  };
+  try {
+    if (editingId) await api("/api/books/" + editingId, { method: "PUT", body: JSON.stringify(data) });
+    else await api("/api/books", { method: "POST", body: JSON.stringify(data) });
+    form.reset(); editingId = null; submitBtn.textContent = "Add book"; say("");
+    await load();
+  } catch (err) { say(err.message); }
+});
+
+document.querySelectorAll(".filters button").forEach(btn => {
+  btn.onclick = () => {
+    filter = btn.dataset.filter;
+    document.querySelectorAll(".filters button").forEach(b => b.setAttribute("aria-pressed", b === btn));
+    render();
+  };
+});
+
+load();
+</script>
+</body>
+</html>
